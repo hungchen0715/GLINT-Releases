@@ -1,0 +1,321 @@
+name: Iterative Public Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_note:
+        description: 'Optional custom note for this iteration release'
+        required: false
+        type: string
+  repository_dispatch:
+    types: [build-iteration]
+
+concurrency:
+  group: iterative-release-main
+  cancel-in-progress: true
+
+jobs:
+  release-iteration:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout private source repo (hungchen0715/GLINT)
+        uses: actions/checkout@v4
+        with:
+          repository: hungchen0715/GLINT
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          fetch-depth: 0
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.2'
+
+      - name: Reset SwiftPM artifact cache
+        run: rm -rf "$HOME/Library/Caches/org.swift.swiftpm/artifacts"
+
+      - name: Compute iteration version metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          BASE_VERSION=$(grep -m1 'MARKETING_VERSION = ' Snapzy.xcodeproj/project.pbxproj | sed -E 's/.*MARKETING_VERSION = ([^;]+);/\1/' | tr -d ' "')
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_SUBJECT=$(git log -1 --pretty=%s)
+          ITER_NUM=$((GITHUB_RUN_NUMBER + 10))
+          ITER_TAG="v${BASE_VERSION}-iter.${ITER_NUM}"
+          TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+
+          {
+            echo "base_version=$BASE_VERSION"
+            echo "short_sha=$SHORT_SHA"
+            echo "commit_subject=$COMMIT_SUBJECT"
+            echo "iter_tag=$ITER_TAG"
+            echo "timestamp=$TIMESTAMP"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify CleanShot X parity & render review screenshots
+        env:
+          CLEANSHOT_SCREENSHOT_DIR: ${{ github.workspace }}/build/cleanshot-review-screenshots
+          TEST_RUNNER_CLEANSHOT_SCREENSHOT_DIR: ${{ github.workspace }}/build/cleanshot-review-screenshots
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLEANSHOT_SCREENSHOT_DIR" /tmp/cleanshot-review-screenshots
+          xcodebuild \
+            -project Snapzy.xcodeproj \
+            -scheme Snapzy \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            -parallel-testing-enabled NO \
+            -only-testing:SnapzyTests/CleanShotParityVerificationTests \
+            -only-testing:SnapzyTests/PostCaptureActionHandlerTests \
+            -only-testing:SnapzyTests/PreferencesCoreTests \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+          cp -f /tmp/cleanshot-review-screenshots/*.png "$CLEANSHOT_SCREENSHOT_DIR/" 2>/dev/null || true
+          ls -lh "$CLEANSHOT_SCREENSHOT_DIR"/*.png
+
+      - name: Upload CleanShot X review screenshots artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanshot-review-screenshots
+          path: build/cleanshot-review-screenshots/*.png
+          if-no-files-found: error
+
+      - name: Build universal Release app bundle
+        run: |
+          set -euo pipefail
+          if ! xcodebuild \
+            -project Snapzy.xcodeproj \
+            -scheme Snapzy \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            build > build/release-build.log 2>&1; then
+            tail -100 build/release-build.log
+            exit 1
+          fi
+
+      - name: Sign & package DMG, ZIP, Checksums, and Screenshots
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-assets build/dmg-root
+          APP_SRC="build/DerivedData/Build/Products/Release/Snapzy.app"
+          APP_PATH="build/dmg-root/Snapzy.app"
+          ditto "$APP_SRC" "$APP_PATH"
+
+          xattr -rc "$APP_PATH"
+          SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          if [ -d "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc" ]; then
+            codesign --force --sign "-" -o runtime --timestamp=none "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc"
+          fi
+          if [ -d "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc" ]; then
+            codesign --force --sign "-" -o runtime --preserve-metadata=entitlements --timestamp=none "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc"
+          fi
+          if [ -f "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate" ]; then
+            codesign --force --sign "-" -o runtime --timestamp=none "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate"
+          fi
+          if [ -d "$SPARKLE_FRAMEWORK/Versions/B/Updater.app" ]; then
+            codesign --force --sign "-" -o runtime --timestamp=none "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
+          fi
+          if [ -d "$SPARKLE_FRAMEWORK" ]; then
+            codesign --force --sign "-" -o runtime --timestamp=none "$SPARKLE_FRAMEWORK"
+          fi
+
+          CLI_HELPER="$APP_PATH/Contents/Helpers/snapzy"
+          if [ -f "$CLI_HELPER" ]; then
+            codesign --force --sign "-" -o runtime --timestamp=none "$CLI_HELPER"
+          fi
+
+          BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist")
+          PROCESSED_ENTITLEMENTS="$RUNNER_TEMP/processed-entitlements.plist"
+          sed "s/\$(PRODUCT_BUNDLE_IDENTIFIER)/$BUNDLE_ID/g" Snapzy/Snapzy.entitlements > "$PROCESSED_ENTITLEMENTS"
+          codesign --force --sign "-" -o runtime --entitlements "$PROCESSED_ENTITLEMENTS" --timestamp=none "$APP_PATH"
+
+          # Create /Applications symlink and build DMG
+          ln -sf /Applications build/dmg-root/Applications
+          hdiutil create \
+            -volname "GLINT" \
+            -srcfolder build/dmg-root \
+            -ov \
+            -format UDZO \
+            build/release-assets/GLINT-macOS.dmg
+
+          # Create ZIP archive
+          ditto -c -k --keepParent "$APP_PATH" build/release-assets/GLINT-macOS.app.zip
+
+          # Copy verification screenshots into release assets
+          cp -f build/cleanshot-review-screenshots/*.png build/release-assets/
+
+          # Generate SHA256SUMS.txt
+          (
+            cd build/release-assets
+            shasum -a 256 GLINT-macOS.dmg GLINT-macOS.app.zip *.png > SHA256SUMS.txt
+          )
+          ls -lh build/release-assets/
+
+      - name: Prepare Release Notes
+        run: |
+          set -euo pipefail
+          ITER_TAG="${{ steps.meta.outputs.iter_tag }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
+          TIMESTAMP="${{ steps.meta.outputs.timestamp }}"
+          CUSTOM_NOTE="${{ inputs.release_note }}"
+
+          {
+            echo "## GLINT (CleanShot X for Mac 1:1 Edition) — \`${ITER_TAG}\`"
+            echo ""
+            echo "- **Iteration Tag**: \`${ITER_TAG}\`"
+            echo "- **Source Commit**: \`${SHORT_SHA}\` (*Private Repo: \`hungchen0715/GLINT\`*)"
+            echo "- **Built At**: ${TIMESTAMP}"
+            if [ -n "$CUSTOM_NOTE" ]; then
+              echo "- **Iteration Note**: ${CUSTOM_NOTE}"
+            fi
+            echo ""
+            echo "### 📦 Direct Downloads"
+            echo "- **macOS Disk Image**: \`GLINT-macOS.dmg\` (Universal \`arm64\` + \`x86_64\`, macOS 14.0+)"
+            echo "- **macOS App Archive**: \`GLINT-macOS.app.zip\`"
+            echo "- **Checksums**: \`SHA256SUMS.txt\`"
+            echo ""
+            echo "### ✨ Recent Iteration Commits"
+            git log -n 8 --pretty=format:"- \`%h\` %s"
+            echo ""
+            echo ""
+            echo "### 🔍 Automated UI Verification Screenshots (Included in Assets)"
+            echo "- \`01_all_in_one_mode_hud.png\` — CleanShot X All-In-One Capture Mode HUD"
+            echo "- \`02_annotate_editor_and_7_text_styles.png\` — Annotate Toolbar (Flip H/V), 7 Text Styles, Smooth Pencil & Secure Pixelate"
+            echo "- \`03_cleanshot_20_backgrounds_showcase.png\` — 20 Curated CleanShot X Gradient Presets & Social Aspect Ratios"
+            echo "- \`04_pin_opacity_quick_access_and_recording_options.png\` — Pin Opacity Pill, Quick Access Overlay & Recording Options"
+            echo "- \`05_video_editor_smart_zoom_and_recording_studio.png\` — Screen + Webcam Recording & Smart Zoom Multi-Track Video Editor Studio"
+          } > build/release-notes.md
+
+      - name: Publish to Private Source Repo (hungchen0715/GLINT)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
+          PRIVATE_REPO: hungchen0715/GLINT
+        run: |
+          set -euo pipefail
+          ITER_TAG="${{ steps.meta.outputs.iter_tag }}"
+
+          if gh release view "$ITER_TAG" --repo "$PRIVATE_REPO" >/dev/null 2>&1; then
+            gh release upload "$ITER_TAG" build/release-assets/* --clobber --repo "$PRIVATE_REPO"
+            gh release edit "$ITER_TAG" --notes-file build/release-notes.md --repo "$PRIVATE_REPO"
+          else
+            gh release create "$ITER_TAG" build/release-assets/* \
+              --title "GLINT ${ITER_TAG}" \
+              --notes-file build/release-notes.md \
+              --repo "$PRIVATE_REPO"
+          fi
+
+          if gh release view "latest" --repo "$PRIVATE_REPO" >/dev/null 2>&1; then
+            gh release upload "latest" build/release-assets/* --clobber --repo "$PRIVATE_REPO"
+            gh release edit "latest" \
+              --title "GLINT Latest Iteration (${ITER_TAG})" \
+              --notes-file build/release-notes.md \
+              --latest \
+              --repo "$PRIVATE_REPO"
+          else
+            git tag -f latest
+            git push origin refs/tags/latest --force
+            gh release create "latest" build/release-assets/* \
+              --title "GLINT Latest Iteration (${ITER_TAG})" \
+              --notes-file build/release-notes.md \
+              --latest \
+              --repo "$PRIVATE_REPO"
+          fi
+
+      - name: Publish to Public Release Repo (hungchen0715/GLINT-Releases)
+        env:
+          GH_TOKEN: ${{ secrets.PRIVATE_REPO_PAT }}
+          PUBLIC_REPO: hungchen0715/GLINT-Releases
+        run: |
+          set -euo pipefail
+          ITER_TAG="${{ steps.meta.outputs.iter_tag }}"
+          SHORT_SHA="${{ steps.meta.outputs.short_sha }}"
+          TIMESTAMP="${{ steps.meta.outputs.timestamp }}"
+
+          PUB_DIR="$RUNNER_TEMP/public-releases-repo"
+          rm -rf "$PUB_DIR"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${PUBLIC_REPO}.git" "$PUB_DIR"
+
+          mkdir -p "$PUB_DIR/screenshots"
+          cp -f build/cleanshot-review-screenshots/*.png "$PUB_DIR/screenshots/"
+
+          {
+            echo "# GLINT for macOS — Public Iteration Releases"
+            echo ""
+            echo "> 🔒 **Source Code Privacy**: The GLINT source repository (\`hungchen0715/GLINT\`) is **Private**. This public repository distributes automated macOS iteration builds (\`DMG\` / \`ZIP\`) and visual verification snapshots on every iteration."
+            echo ""
+            echo "## 🚀 Latest Iteration: \`${ITER_TAG}\`"
+            echo "- **Built At**: ${TIMESTAMP}"
+            echo "- **Commit**: \`${SHORT_SHA}\`"
+            echo "- **Direct Download (Always Latest)**:"
+            echo "  - 💿 [**Download GLINT-macOS.dmg (Latest)**](https://github.com/${PUBLIC_REPO}/releases/download/latest/GLINT-macOS.dmg)"
+            echo "  - 📦 [**Download GLINT-macOS.app.zip (Latest)**](https://github.com/${PUBLIC_REPO}/releases/download/latest/GLINT-macOS.app.zip)"
+            echo "  - 🏷️ [**View All Iteration Releases**](https://github.com/${PUBLIC_REPO}/releases)"
+            echo ""
+            echo "---"
+            echo ""
+            echo "## 📸 Automated macOS Verification Screenshots (\`${ITER_TAG}\`)"
+            echo ""
+            echo "### 1. CleanShot X All-In-One Mode HUD"
+            echo "![All-In-One Mode HUD](screenshots/01_all_in_one_mode_hud.png)"
+            echo ""
+            echo "### 2. Annotate Editor, Flip H/V, 7 Predefined Text Styles, Smooth Pencil & Secure Pixelate"
+            echo "![Annotate Editor & 7 Text Styles](screenshots/02_annotate_editor_and_7_text_styles.png)"
+            echo ""
+            echo "### 3. 20 CleanShot X Curated Gradient Presets & Social Aspect Ratios"
+            echo "![20 CleanShot X Backgrounds](screenshots/03_cleanshot_20_backgrounds_showcase.png)"
+            echo ""
+            echo "### 4. Floating Pin Window Opacity Pill, Quick Access Card & Recording Options"
+            echo "![Pin Opacity, Quick Access & Recording Options](screenshots/04_pin_opacity_quick_access_and_recording_options.png)"
+            echo ""
+            echo "### 5. Screen + Webcam Recording & Smart Zoom Multi-Track Video Editor Studio"
+            echo "![Video Editor Smart Zoom & Recording Studio](screenshots/05_video_editor_smart_zoom_and_recording_studio.png)"
+          } > "$PUB_DIR/README.md"
+
+          pushd "$PUB_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B main
+          git add README.md screenshots/*.png
+          git commit -m "release: update public iteration to ${ITER_TAG} (${SHORT_SHA})" || true
+          git push -u origin main --force
+
+          git tag -f "$ITER_TAG"
+          git tag -f "latest"
+          git push origin "refs/tags/${ITER_TAG}" --force
+          git push origin "refs/tags/latest" --force
+          popd
+
+          if gh release view "$ITER_TAG" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+            gh release upload "$ITER_TAG" build/release-assets/* --clobber --repo "$PUBLIC_REPO"
+            gh release edit "$ITER_TAG" --notes-file build/release-notes.md --repo "$PUBLIC_REPO"
+          else
+            gh release create "$ITER_TAG" build/release-assets/* \
+              --title "GLINT ${ITER_TAG}" \
+              --notes-file build/release-notes.md \
+              --repo "$PUBLIC_REPO"
+          fi
+
+          if gh release view "latest" --repo "$PUBLIC_REPO" >/dev/null 2>&1; then
+            gh release upload "latest" build/release-assets/* --clobber --repo "$PUBLIC_REPO"
+            gh release edit "latest" \
+              --title "GLINT Latest Iteration (${ITER_TAG})" \
+              --notes-file build/release-notes.md \
+              --latest \
+              --repo "$PUBLIC_REPO"
+          else
+            gh release create "latest" build/release-assets/* \
+              --title "GLINT Latest Iteration (${ITER_TAG})" \
+              --notes-file build/release-notes.md \
+              --latest \
+              --repo "$PUBLIC_REPO"
+          fi
