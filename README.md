@@ -2,9 +2,9 @@
 
 > 🔒 **Source Code Privacy**: The GLINT source repository (`hungchen0715/GLINT`) is **Private**. This public repository distributes automated macOS iteration builds (`DMG` / `ZIP`) and visual verification snapshots on every iteration.
 
-## 🚀 Latest Iteration: `v2.2.0-beta.9-iter.6`
-- **Built At**: 2026-11-10 21:35 UTC
-- **Commit**: `7c10fca5`
+## 🚀 Latest Iteration: `v2.2.0-beta.9-iter.14`
+- **Built At**: 2026-11-11 00:11 UTC
+- **Commit**: `af8cf94e`
 - **Direct Download (Always Latest)**:
   - 💿 [**Download GLINT-macOS.dmg (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.dmg)
   - 📦 [**Download GLINT-macOS.app.zip (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.app.zip)
@@ -12,7 +12,7 @@
 
 ---
 
-## 📸 Automated macOS Verification Screenshots (`v2.2.0-beta.9-iter.6`)
+## 📸 Automated macOS Verification Screenshots (`v2.2.0-beta.9-iter.14`)
 
 ### 1. CleanShot X All-In-One Mode HUD
 ![All-In-One Mode HUD](screenshots/01_all_in_one_mode_hud.png)
