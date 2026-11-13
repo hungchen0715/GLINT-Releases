@@ -1,18 +1,18 @@
-# GLINT for macOS — Public Iteration Releases
+﻿# GLINT for macOS â€” Public Iteration Releases
 
-> 🔒 **Source Code Privacy**: The GLINT source repository (`hungchen0715/GLINT`) is **Private**. This public repository distributes automated macOS iteration builds (`DMG` / `ZIP`) and visual verification snapshots on every iteration.
+> ðŸ”’ **Source Code Privacy**: The GLINT source repository (`hungchen0715/GLINT`) is **Private**. This public repository distributes automated macOS iteration builds (`DMG` / `ZIP`) and visual verification snapshots on every iteration.
 
-## 🚀 Latest Iteration: `v2.2.0-beta.9-iter.14`
+## ðŸš€ Latest Iteration: `v2.2.0-beta.9-iter.14`
 - **Built At**: 2026-11-11 00:11 UTC
 - **Commit**: `af8cf94e`
 - **Direct Download (Always Latest)**:
-  - 💿 [**Download GLINT-macOS.dmg (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.dmg)
-  - 📦 [**Download GLINT-macOS.app.zip (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.app.zip)
-  - 🏷️ [**View All Iteration Releases**](https://github.com/hungchen0715/GLINT-Releases/releases)
+  - ðŸ’¿ [**Download GLINT-macOS.dmg (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.dmg)
+  - ðŸ“¦ [**Download GLINT-macOS.app.zip (Latest)**](https://github.com/hungchen0715/GLINT-Releases/releases/download/latest/GLINT-macOS.app.zip)
+  - ðŸ·ï¸ [**View All Iteration Releases**](https://github.com/hungchen0715/GLINT-Releases/releases)
 
 ---
 
-## 📸 Automated macOS Verification Screenshots (`v2.2.0-beta.9-iter.14`)
+## ðŸ“¸ Automated macOS Verification Screenshots (`v2.2.0-beta.9-iter.14`)
 
 ### 1. CleanShot X All-In-One Mode HUD
 ![All-In-One Mode HUD](screenshots/01_all_in_one_mode_hud.png)
@@ -28,3 +28,4 @@
 
 ### 5. Screen + Webcam Recording & Smart Zoom Multi-Track Video Editor Studio
 ![Video Editor Smart Zoom & Recording Studio](screenshots/05_video_editor_smart_zoom_and_recording_studio.png)
+
